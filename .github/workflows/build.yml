@@ -1,0 +1,71 @@
+name: Build LockBrowser IPA (ESign / unsigned)
+
+# Repo layout expected:
+#   .github/workflows/build.yml   (this file)
+#   LockBrowser.zip                (zipped Xcode project — see README)
+#
+# The zip should contain, at its ROOT (no extra wrapper folder):
+#   LockBrowser.xcodeproj/
+#   LockBrowser/            (Swift sources, Info.plist, Assets.xcassets)
+#
+# This lets you update the app by just re-uploading LockBrowser.zip —
+# no need to unpack it into the repo yourself.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14   # Xcode 15 available
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Unzip project
+        run: |
+          if [ ! -f LockBrowser.zip ]; then
+            echo "::error::LockBrowser.zip not found in repo root"
+            exit 1
+          fi
+          unzip -o LockBrowser.zip -d .
+          ls -la
+
+      - name: Select Xcode 15
+        run: sudo xcode-select -s /Applications/Xcode_15.4.app
+
+      # ── Build archive (no signing — ESign will sign on-device) ─────────────
+      - name: Build archive (unsigned)
+        run: |
+          xcodebuild archive \
+            -project LockBrowser.xcodeproj \
+            -scheme LockBrowser \
+            -configuration Release \
+            -archivePath ${{ runner.temp }}/LockBrowser.xcarchive \
+            -destination "generic/platform=iOS" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM=""
+
+      # ── Package into IPA manually ───────────────────────────────────────────
+      # xcodebuild -exportArchive requires a real cert, so we package manually.
+      # ESign re-signs the .app bundle itself, so this unsigned IPA is fine.
+      - name: Package IPA
+        run: |
+          APP_PATH=$(find ${{ runner.temp }}/LockBrowser.xcarchive \
+            -name "*.app" -maxdepth 5 | head -1)
+          mkdir -p ${{ runner.temp }}/Payload
+          cp -r "$APP_PATH" ${{ runner.temp }}/Payload/LockBrowser.app
+          cd ${{ runner.temp }}
+          zip -r LockBrowser.ipa Payload/
+
+      # ── Upload IPA as artifact ──────────────────────────────────────────────
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: LockBrowser-IPA
+          path: ${{ runner.temp }}/LockBrowser.ipa
+          retention-days: 30
